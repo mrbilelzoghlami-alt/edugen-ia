@@ -1,111 +1,113 @@
 // src/app/taf/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 import { tafService } from "../../../services/tafService";
 import ExerciseRenderer from "../../../components/exercises/ExerciseRenderer";
 
 export default function ViewTAF() {
-  const { id } = useParams();
-  const router  = useRouter();
+  const { id }   = useParams();
+  const router   = useRouter();
 
-  const [taf, setTaf]         = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState(false);
+  const [taf, setTaf]             = useState<any>(null);
+  const [loading, setLoading]     = useState(true);
+  const [saving, setSaving]       = useState(false);
   const [completed, setCompleted] = useState(false);
-
-  // ── Vérification pseudo ──────────────────────────────────────────────────
-  const [needsAuth, setNeedsAuth]       = useState(false);
-  const [pseudoInput, setPseudoInput]   = useState("");
-  const [authError, setAuthError]       = useState<string | null>(null);
-  const [authLoading, setAuthLoading]   = useState(false);
+  const [needsAuth, setNeedsAuth] = useState(false);
+  const [pseudoInput, setPseudoInput] = useState("");
+  const [authError, setAuthError]     = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
 
   // ── Chargement du TAF ────────────────────────────────────────────────────
-  useEffect(() => {
+  const loadTAF = useCallback(async () => {
     if (!id) return;
+    setLoading(true);
 
-    async function fetchTAF() {
-      const { data, error } = await supabase
-        .from("tafs")
-        .select("*")
-        .eq("id", id)
-        .single();
+    const { data, error } = await supabase
+      .from("tafs")
+      .select("*")
+      .eq("id", id)
+      .single();
 
-      if (error || !data) {
-        router.push("/login");
-        return;
-      }
-
-      setTaf(data);
-
-      // ── Vérifier si l'enfant est déjà identifié ────────────────────────
-      const role      = localStorage.getItem("edugen_role");
-      const profileId = localStorage.getItem("edugen_profile_id");
-      const pseudoEnfant = localStorage.getItem("pseudo_enfant");
-
-      const alreadyAuth =
-        // Cas 1 : connecté en tant que parent propriétaire du TAF
-        (role === "parent" && profileId === data.profile_id) ||
-        // Cas 2 : connecté en tant qu'enfant avec pseudo connu
-        (role === "enfant" && !!pseudoEnfant);
-
-      if (alreadyAuth) {
-        // Marquer en_cours si première ouverture
-        if (data.status === "créé") {
-          tafService.updateStatus(data.id, "en_cours").catch(console.error);
-        }
-        setLoading(false);
-      } else {
-        // Pas identifié → afficher le modal de vérification
-        setNeedsAuth(true);
-        setLoading(false);
-      }
+    // ✅ Erreur ou RLS bloque → afficher modal pseudo (jamais rediriger)
+    if (error || !data) {
+      setNeedsAuth(true);
+      setLoading(false);
+      return;
     }
 
-    fetchTAF();
-  }, [id, router]);
+    setTaf(data);
 
-  // ── Vérification du pseudo saisi ─────────────────────────────────────────
+    const role       = localStorage.getItem("edugen_role");
+    const profileId  = localStorage.getItem("edugen_profile_id");
+    const pseudoEnfant = localStorage.getItem("pseudo_enfant");
+
+    const alreadyAuth =
+      (role === "parent" && profileId === data.profile_id) ||
+      (role === "enfant" && !!pseudoEnfant);
+
+    if (alreadyAuth) {
+      if (data.status === "créé") {
+        tafService.updateStatus(data.id, "en_cours").catch(console.error);
+      }
+      setNeedsAuth(false);
+    } else {
+      setNeedsAuth(true);
+    }
+
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => { loadTAF(); }, [loadTAF]);
+
+  // ── Vérification du pseudo ────────────────────────────────────────────────
   const handleVerifyPseudo = async () => {
-    if (!pseudoInput.trim() || !taf) return;
+    if (!pseudoInput.trim()) return;
     setAuthLoading(true);
     setAuthError(null);
 
     try {
-      // Cherche le profil propriétaire du TAF
-      const { data: profile, error } = await supabase
-        .from("profiles")
-        .select("id, pseudo_enfant, pseudo_parent")
-        .eq("id", taf.profile_id)
-        .single();
+      const input = pseudoInput.trim().toLowerCase();
 
-      if (error || !profile) {
-        setAuthError("Devoir introuvable. Demande le lien à nouveau.");
+      // Cherche un profil qui correspond au pseudo (enfant ou parent)
+      const { data: profiles, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, pseudo_enfant, pseudo_parent");
+
+      if (profileError || !profiles || profiles.length === 0) {
+        setAuthError("Impossible de vérifier le pseudo. Réessaie.");
         setAuthLoading(false);
         return;
       }
 
-      const input = pseudoInput.trim().toLowerCase();
-      const isEnfant = profile.pseudo_enfant.toLowerCase() === input;
-      const isParent = profile.pseudo_parent.toLowerCase() === input;
+      // Trouve le profil qui correspond au pseudo tapé ET qui possède ce TAF
+      const matched = profiles.find(
+        (p) =>
+          p.pseudo_enfant.toLowerCase() === input ||
+          p.pseudo_parent.toLowerCase() === input
+      );
 
-      if (isEnfant || isParent) {
-        // ✅ Identifié → sauvegarder dans localStorage
-        localStorage.setItem("edugen_profile_id", profile.id);
-        localStorage.setItem("edugen_role", isParent ? "parent" : "enfant");
-        if (isEnfant) localStorage.setItem("pseudo_enfant", profile.pseudo_enfant);
-        if (isParent) localStorage.setItem("pseudo_parent", profile.pseudo_parent);
-
-        // Marquer en_cours
-        if (taf.status === "créé") {
-          await tafService.updateStatus(taf.id, "en_cours").catch(console.error);
-        }
-        setNeedsAuth(false);
-      } else {
+      if (!matched) {
         setAuthError("Pseudo incorrect. Demande à ton parent quel pseudo il t'a donné.");
+        setAuthLoading(false);
+        return;
       }
+
+      const isEnfant = matched.pseudo_enfant.toLowerCase() === input;
+      const isParent = matched.pseudo_parent.toLowerCase() === input;
+
+      // Sauvegarder dans localStorage
+      localStorage.setItem("edugen_profile_id", matched.id);
+      localStorage.setItem("edugen_role", isParent ? "parent" : "enfant");
+      if (isEnfant) localStorage.setItem("pseudo_enfant", matched.pseudo_enfant);
+      if (isParent) localStorage.setItem("pseudo_parent", matched.pseudo_parent);
+
+      // Recharger le TAF
+      setNeedsAuth(false);
+      await loadTAF();
+
     } catch {
       setAuthError("Une erreur est survenue. Réessaie.");
     } finally {
@@ -118,8 +120,8 @@ export default function ViewTAF() {
     if (!taf) return;
     setSaving(true);
     try {
-      const scoreGlobal  = Math.round((score / total) * 20);
-      const scoreDetail  = { score, total, percentage: Math.round((score / total) * 100), answers };
+      const scoreGlobal = Math.round((score / total) * 20);
+      const scoreDetail = { score, total, percentage: Math.round((score / total) * 100), answers };
       await tafService.saveScore(taf.id, scoreGlobal, scoreDetail);
       setCompleted(true);
     } catch (err) {
@@ -138,12 +140,11 @@ export default function ViewTAF() {
     );
   }
 
-  // ── Modal vérification pseudo ─────────────────────────────────────────────
+  // ── Modal pseudo ──────────────────────────────────────────────────────────
   if (needsAuth) {
     return (
       <main className="bg-yellow-50 flex items-center justify-center min-h-screen p-4 font-sans text-black">
         <div className="bg-white rounded-3xl border-4 border-b-8 border-yellow-400 p-8 w-full max-w-sm shadow-xl text-center">
-
           <div className="text-6xl mb-4">🎒</div>
           <h1 className="text-2xl font-black text-slate-800 mb-1">Ton devoir t'attend !</h1>
           {taf?.title && (
@@ -181,19 +182,16 @@ export default function ViewTAF() {
           </div>
 
           <p className="text-xs text-slate-300 font-bold mt-6">
-            Ton pseudo t'a été donné par ton parent.<br />
-            Problème ? Demande-lui de vérifier.
+            Ton pseudo t'a été donné par ton parent.
           </p>
         </div>
       </main>
     );
   }
 
-  // ── Vue du TAF ────────────────────────────────────────────────────────────
+  // ── Vue TAF ───────────────────────────────────────────────────────────────
   return (
     <main className="bg-slate-50 min-h-screen pb-20">
-
-      {/* Header */}
       <div className="bg-white border-b-4 border-slate-100 p-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex items-center gap-4">
           <button
@@ -207,9 +205,9 @@ export default function ViewTAF() {
             <h1 className="font-black text-xl text-slate-800 truncate">{taf.title}</h1>
             <div className="flex items-center gap-2 mt-0.5">
               <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg ${
-                taf.status === "terminé"   ? "bg-green-100 text-green-600" :
-                taf.status === "en_cours"  ? "bg-orange-100 text-orange-600" :
-                                             "bg-gray-100 text-gray-400"
+                taf.status === "terminé"  ? "bg-green-100 text-green-600" :
+                taf.status === "en_cours" ? "bg-orange-100 text-orange-600" :
+                                            "bg-gray-100 text-gray-400"
               }`}>
                 {taf.status}
               </span>
@@ -224,8 +222,6 @@ export default function ViewTAF() {
       </div>
 
       <div className="max-w-2xl mx-auto p-6">
-
-        {/* Overlay sauvegarde */}
         {saving && (
           <div className="fixed inset-0 bg-white/70 backdrop-blur-md flex items-center justify-center z-50">
             <div className="text-center space-y-3">
@@ -235,15 +231,13 @@ export default function ViewTAF() {
           </div>
         )}
 
-        {/* Confirmation sauvegarde */}
         {completed && (
           <div className="mb-6 bg-green-100 border-2 border-green-400 text-green-800 p-4 rounded-2xl font-bold text-center text-sm">
             ✅ Score sauvegardé ! Ton parent peut voir tes résultats.
           </div>
         )}
 
-        {/* Exercices */}
-        {taf.content_json?.exercises ? (
+        {taf?.content_json?.exercises ? (
           <ExerciseRenderer
             exercises={taf.content_json.exercises}
             maxAttempts={taf.attempts_left || 2}
@@ -252,9 +246,6 @@ export default function ViewTAF() {
         ) : (
           <div className="text-center py-20">
             <p className="text-slate-400 font-bold">Les exercices ne sont pas disponibles.</p>
-            <button onClick={() => router.push("/dashboard")} className="mt-4 text-purple-600 font-black underline">
-              Retour
-            </button>
           </div>
         )}
       </div>
