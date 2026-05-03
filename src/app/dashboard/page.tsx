@@ -2,109 +2,177 @@
 
 import { useEffect, useState } from "react";
 import { tafService } from "../../services/tafService";
+import { authService } from "../../services/authService";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
+  const router = useRouter();
   const [parentName, setParentName] = useState("");
+  const [enfantName, setEnfantName] = useState("");
   const [tafs, setTafs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Récupération sécurisée des données du profil
     const profileId = localStorage.getItem("edugen_profile_id");
     const pseudo = localStorage.getItem("pseudo_parent");
-    
-    if (pseudo) setParentName(pseudo);
+    const pseudoEnfant = localStorage.getItem("pseudo_enfant") || "";
 
-    if (profileId) {
-      tafService.getTafsByProfile(profileId)
-        .then(data => {
-          setTafs(data || []);
-          setLoading(false);
-        })
-        .catch((err) => {
-          console.error("Erreur lors de la récupération des TAFs:", err);
-          setLoading(false);
-        });
-    } else {
-      setLoading(false);
-    }
-  }, []);
+    if (!profileId) { router.push("/login"); return; }
+
+    if (pseudo) setParentName(pseudo);
+    if (pseudoEnfant) setEnfantName(pseudoEnfant);
+
+    tafService.getTafsByProfile(profileId)
+      .then(data => { setTafs(data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [router]);
+
+  // ── Copie du lien d'un TAF ───────────────────────────────────────────────
+  const handleCopyLink = async (tafId: string) => {
+    const link = `${window.location.origin}/taf/${tafId}`;
+    await navigator.clipboard.writeText(link);
+    setCopiedId(tafId);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // ── Partage WhatsApp d'un TAF ────────────────────────────────────────────
+  const handleWhatsApp = (tafId: string, tafTitle: string) => {
+    const link = `${window.location.origin}/taf/${tafId}`;
+    const msg = encodeURIComponent(
+      `Salut ${enfantName || "toi"} ! 🎒\nTon devoir "${tafTitle}" t'attend ici :\n${link}\nBonne chance ! 💪`
+    );
+    window.open(`https://wa.me/?text=${msg}`, "_blank");
+  };
+
+  // ── Statut couleur ───────────────────────────────────────────────────────
+  const statusStyle = (status: string) => {
+    if (status === "terminé") return "bg-green-100 text-green-600";
+    if (status === "en_cours") return "bg-orange-100 text-orange-600";
+    return "bg-gray-100 text-gray-400";
+  };
+
+  // ── Déconnexion ──────────────────────────────────────────────────────────
+  const handleLogout = () => {
+    authService.logout();
+    router.push("/login");
+  };
 
   return (
     <main className="bg-blue-50 min-h-screen font-sans pb-20 text-black">
-      {/* Navigation supérieure */}
+
+      {/* Nav */}
       <nav className="bg-white border-b-4 border-blue-200 p-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex justify-between items-center">
           <h1 className="text-2xl font-black text-blue-500 uppercase italic">EduGen IA</h1>
-          <span className="bg-blue-100 text-blue-600 px-4 py-2 rounded-full text-sm font-bold shadow-sm">
-            Salut, {parentName} ! 👋
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="bg-blue-100 text-blue-600 px-3 py-1.5 rounded-full text-sm font-bold">
+              👋 {parentName}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-slate-400 font-bold hover:text-red-400 transition-colors"
+            >
+              Déco
+            </button>
+          </div>
         </div>
       </nav>
 
-      <div className="max-w-2xl mx-auto p-4 space-y-8 mt-6">
-        {/* Bouton de création avec Link corrigé */}
+      <div className="max-w-2xl mx-auto p-4 space-y-6 mt-4">
+
+        {/* Bouton créer */}
         <Link href="/dashboard/create" className="block">
-          <button 
-            className="w-full bg-emerald-400 hover:bg-emerald-300 text-white p-6 rounded-3xl border-b-8 border-emerald-600 transition-all active:border-b-0 active:translate-y-1 flex items-center justify-center gap-4 shadow-lg"
-          >
-            <span className="text-4xl text-white">➕</span>
+          <button className="w-full bg-emerald-400 hover:bg-emerald-300 text-white p-6 rounded-3xl border-b-8 border-emerald-600 transition-all active:border-b-0 active:translate-y-1 flex items-center justify-center gap-4 shadow-lg">
+            <span className="text-4xl">➕</span>
             <span className="text-2xl font-black uppercase tracking-tight">Créer un nouveau TAF</span>
           </button>
         </Link>
 
+        {/* Infant pseudo badge */}
+        {enfantName && (
+          <div className="bg-white rounded-2xl border-2 border-blue-100 p-3 flex items-center gap-3">
+            <span className="text-2xl">🎒</span>
+            <div>
+              <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Pseudo de ton enfant</p>
+              <p className="font-black text-slate-700">{enfantName}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Liste des TAFs */}
         <section>
           <div className="flex items-center gap-2 mb-4">
             <span className="text-2xl">📂</span>
             <h2 className="text-xl font-black text-gray-700 uppercase tracking-tight">Tes travaux</h2>
+            <span className="bg-blue-100 text-blue-600 text-xs font-black px-2 py-1 rounded-full">{tafs.length}</span>
           </div>
-          
+
           {loading ? (
             <div className="flex flex-col items-center py-10 gap-3">
-              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="font-bold text-gray-400">Chargement de tes TAFs...</p>
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="font-bold text-gray-400">Chargement...</p>
             </div>
           ) : tafs.length > 0 ? (
             <div className="grid gap-4">
               {tafs.map((taf) => (
-                <Link 
-                  key={taf.id} 
-                  href={`/taf/${taf.id}`} 
-                  className="block group"
-                >
-                  <div className="bg-white p-5 rounded-3xl border-4 border-b-8 border-gray-200 group-hover:border-purple-400 group-hover:scale-[1.01] transition-all duration-200 flex justify-between items-center cursor-pointer shadow-sm group-hover:shadow-xl">
-                    <div className="flex-1">
-                      <h3 className="font-black text-lg text-gray-800 group-hover:text-purple-600 transition-colors truncate pr-4">
-                        {taf.title}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] font-black uppercase px-2 py-1 bg-orange-100 text-orange-600 rounded-lg">
-                          {taf.status || "créé"}
-                        </span>
-                        <span className="text-[10px] font-bold text-gray-400 italic">
-                          {taf.created_at ? new Date(taf.created_at).toLocaleDateString() : ""}
-                        </span>
+                <div key={taf.id} className="bg-white rounded-3xl border-4 border-b-8 border-gray-200 shadow-sm overflow-hidden">
+
+                  {/* Infos du TAF */}
+                  <Link href={`/taf/${taf.id}`} className="block p-5 hover:bg-slate-50 transition-colors">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1 min-w-0 pr-3">
+                        <h3 className="font-black text-lg text-gray-800 truncate">{taf.title}</h3>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-lg ${statusStyle(taf.status)}`}>
+                            {taf.status || "créé"}
+                          </span>
+                          <span className="text-[10px] font-bold text-gray-400">
+                            {taf.created_at ? new Date(taf.created_at).toLocaleDateString("fr-FR") : ""}
+                          </span>
+                          {taf.last_activity && taf.status === "en_cours" && (
+                            <span className="text-[10px] font-bold text-orange-400">
+                              Dernière activité : {new Date(taf.last_activity).toLocaleDateString("fr-FR")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        {taf.score_global > 0 ? (
+                          <p className={`text-lg font-black ${taf.score_global >= 14 ? "text-green-500" : taf.score_global >= 10 ? "text-orange-500" : "text-red-400"}`}>
+                            {taf.score_global}/20
+                          </p>
+                        ) : (
+                          <p className="text-sm font-bold text-slate-300">—/20</p>
+                        )}
                       </div>
                     </div>
-                    
-                    <div className="text-right flex flex-col items-end gap-1">
-                      <p className="text-sm font-black text-blue-500 italic">
-                        Score: {taf.score_global || 0}/20
-                      </p>
-                      <span className="text-gray-300 text-xl group-hover:text-purple-500 group-hover:translate-x-1 transition-all">
-                        ➔
-                      </span>
-                    </div>
+                  </Link>
+
+                  {/* Barre de partage */}
+                  <div className="border-t-2 border-gray-100 px-5 py-3 flex gap-2">
+                    <button
+                      onClick={() => handleCopyLink(taf.id)}
+                      className={`flex-1 py-2 rounded-2xl font-black text-xs uppercase transition-all ${copiedId === taf.id ? "bg-green-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-purple-100 hover:text-purple-600"}`}
+                    >
+                      {copiedId === taf.id ? "✓ Lien copié !" : "🔗 Copier le lien"}
+                    </button>
+                    <button
+                      onClick={() => handleWhatsApp(taf.id, taf.title)}
+                      className="flex-1 py-2 rounded-2xl font-black text-xs uppercase bg-green-100 text-green-600 hover:bg-green-500 hover:text-white transition-all"
+                    >
+                      📱 WhatsApp
+                    </button>
                   </div>
-                </Link>
+                </div>
               ))}
             </div>
           ) : (
-            <div className="bg-white rounded-3xl border-4 border-gray-200 p-12 text-center flex flex-col items-center gap-4 border-dashed">
+            <div className="bg-white rounded-3xl border-4 border-gray-200 p-12 text-center border-dashed">
               <span className="text-5xl">🏜️</span>
-              <p className="text-gray-400 font-bold italic">
-                C'est bien vide ici...<br/>Commence par créer ton premier exercice !
+              <p className="text-gray-400 font-bold italic mt-4">
+                C'est bien vide ici...<br />Crée ton premier exercice !
               </p>
             </div>
           )}
