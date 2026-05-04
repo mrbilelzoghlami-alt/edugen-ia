@@ -1,4 +1,4 @@
-// src/app/dashboard/page.tsx — avec pastille notification
+// src/app/dashboard/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,6 +6,7 @@ import { tafService } from "../../services/tafService";
 import { authService } from "../../services/authService";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -16,28 +17,26 @@ export default function Dashboard() {
   const [copiedId, setCopiedId]       = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifs, setShowNotifs]   = useState(false);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+
+  const loadData = (profileId: string) => {
+    tafService.getTafsByProfile(profileId)
+      .then((data) => { setTafs(data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+    tafService.getUnreadCount(profileId).then(setUnreadCount);
+  };
 
   useEffect(() => {
-    const profileId   = localStorage.getItem("edugen_profile_id");
-    const pseudo      = localStorage.getItem("pseudo_parent");
+    const profileId = localStorage.getItem("edugen_profile_id");
+    const pseudo     = localStorage.getItem("pseudo_parent");
     const pseudoEnfant = localStorage.getItem("pseudo_enfant") || "";
-    const role        = localStorage.getItem("edugen_role");
-
+    const role       = localStorage.getItem("edugen_role");
     if (!profileId || role !== "parent") { router.push("/login"); return; }
-
     if (pseudo)       setParentName(pseudo);
     if (pseudoEnfant) setEnfantName(pseudoEnfant);
-
-    tafService.getTafsByProfile(profileId).then((data) => {
-      setTafs(data || []);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-
-    // Compteur pastille
-    tafService.getUnreadCount(profileId).then(setUnreadCount);
+    loadData(profileId);
   }, [router]);
 
-  // ── Ouvre le panneau notifs + marque comme lu ────────────────────────────
   const handleOpenNotifs = async () => {
     setShowNotifs(!showNotifs);
     if (!showNotifs && unreadCount > 0) {
@@ -59,29 +58,55 @@ export default function Dashboard() {
     window.open(`https://wa.me/?text=${msg}`, "_blank");
   };
 
+  // ── Dupliquer un TAF ──────────────────────────────────────────────────────
+  const handleDuplicate = async (taf: any) => {
+    setDuplicatingId(taf.id);
+    try {
+      const profileId = localStorage.getItem("edugen_profile_id");
+      const { data, error } = await supabase.from("tafs").insert([{
+        profile_id:   profileId,
+        title:        `${taf.title} (copie)`,
+        content_json: taf.content_json,
+        settings:     taf.settings,
+        status:       "créé",
+        score_global: 0,
+        score_detail: null,
+        attempts_left: taf.attempts_left || 2,
+        parent_notified: false,
+      }]).select().single();
+
+      if (error) throw error;
+
+      // Copier le lien du nouveau TAF
+      const newLink = `${window.location.origin}/taf/${data.id}`;
+      await navigator.clipboard.writeText(newLink);
+
+      // Recharger la liste
+      loadData(profileId!);
+      alert(`✅ TAF dupliqué ! Nouveau lien copié dans le presse-papier :\n${newLink}`);
+    } catch (err: any) {
+      alert("Erreur lors de la duplication : " + err.message);
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
+
   const statusStyle = (status: string) => {
     if (status === "terminé")  return "bg-green-100 text-green-600";
     if (status === "en_cours") return "bg-orange-100 text-orange-600";
     return "bg-gray-100 text-gray-400";
   };
 
-  // TAFs terminés non lus (pour le panneau)
-  const newlyDone = tafs.filter((t) => t.status === "terminé" && !t.parent_notified);
-
   return (
     <main className="bg-blue-50 min-h-screen font-sans pb-20 text-black">
 
-      {/* ── Nav ─────────────────────────────────────────────────────────── */}
+      {/* ── Nav ──────────────────────────────────────────────────────────── */}
       <nav className="bg-white border-b-4 border-blue-200 p-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex justify-between items-center">
           <h1 className="text-2xl font-black text-blue-500 uppercase italic">EduGen IA</h1>
           <div className="flex items-center gap-3">
-
-            {/* 🔔 Cloche avec pastille */}
-            <button
-              onClick={handleOpenNotifs}
-              className="relative w-10 h-10 rounded-full bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition-colors"
-            >
+            <button onClick={handleOpenNotifs}
+              className="relative w-10 h-10 rounded-full bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition-colors">
               <span className="text-xl">🔔</span>
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center animate-bounce">
@@ -89,7 +114,6 @@ export default function Dashboard() {
                 </span>
               )}
             </button>
-
             <span className="bg-blue-100 text-blue-600 px-3 py-1.5 rounded-full text-sm font-bold">
               👋 {parentName}
             </span>
@@ -100,7 +124,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Panneau notifications ──────────────────────────────────────── */}
+        {/* Panneau notifications */}
         {showNotifs && (
           <div className="max-w-2xl mx-auto mt-3">
             <div className="bg-white rounded-2xl border-2 border-blue-100 shadow-xl overflow-hidden">
@@ -108,35 +132,31 @@ export default function Dashboard() {
                 <p className="font-black text-white text-sm uppercase tracking-widest">🔔 Notifications</p>
                 <button onClick={() => setShowNotifs(false)} className="text-blue-200 font-black hover:text-white">✕</button>
               </div>
-
-              {newlyDone.length === 0 && unreadCount === 0 ? (
+              {tafs.filter((t) => t.status === "terminé").length === 0 ? (
                 <div className="p-6 text-center">
                   <p className="text-slate-400 font-bold text-sm">Aucune nouvelle notification.</p>
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {tafs
-                    .filter((t) => t.status === "terminé")
-                    .slice(0, 5)
-                    .map((taf) => (
-                      <Link key={taf.id} href={`/taf/${taf.id}`} onClick={() => setShowNotifs(false)}>
-                        <div className="px-4 py-3 hover:bg-blue-50 transition-colors flex items-center gap-3">
-                          <span className="text-2xl">
-                            {taf.score_global >= 14 ? "🏆" : taf.score_global >= 10 ? "⭐" : "💪"}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-black text-sm text-slate-800 truncate">{taf.title}</p>
-                            <p className="text-xs text-slate-500 font-bold">
-                              {enfantName} a obtenu{" "}
-                              <span className={`font-black ${taf.score_global >= 14 ? "text-green-600" : taf.score_global >= 10 ? "text-orange-500" : "text-red-500"}`}>
-                                {taf.score_global}/20
-                              </span>
-                            </p>
-                          </div>
-                          <span className="text-slate-300 text-sm">→</span>
+                  {tafs.filter((t) => t.status === "terminé").slice(0, 5).map((taf) => (
+                    <Link key={taf.id} href={`/taf/${taf.id}`} onClick={() => setShowNotifs(false)}>
+                      <div className="px-4 py-3 hover:bg-blue-50 transition-colors flex items-center gap-3">
+                        <span className="text-2xl">
+                          {taf.score_global >= 14 ? "🏆" : taf.score_global >= 10 ? "⭐" : "💪"}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-black text-sm text-slate-800 truncate">{taf.title}</p>
+                          <p className="text-xs text-slate-500 font-bold">
+                            {enfantName} a obtenu{" "}
+                            <span className={`font-black ${taf.score_global >= 14 ? "text-green-600" : taf.score_global >= 10 ? "text-orange-500" : "text-red-500"}`}>
+                              {taf.score_global}/20
+                            </span>
+                          </p>
                         </div>
-                      </Link>
-                    ))}
+                        <span className="text-slate-300 text-sm">→</span>
+                      </div>
+                    </Link>
+                  ))}
                 </div>
               )}
             </div>
@@ -181,26 +201,24 @@ export default function Dashboard() {
           ) : tafs.length === 0 ? (
             <div className="bg-white rounded-3xl border-4 border-dashed border-gray-200 p-12 text-center">
               <span className="text-5xl">🏜️</span>
-              <p className="text-gray-400 font-bold italic mt-4">
-                C'est bien vide ici...<br />Crée ton premier exercice !
-              </p>
+              <p className="text-gray-400 font-bold italic mt-4">Crée ton premier exercice !</p>
             </div>
           ) : (
             <div className="grid gap-4">
               {tafs.map((taf) => (
                 <div key={taf.id} className={`bg-white rounded-3xl border-4 border-b-8 shadow-sm overflow-hidden transition-all ${
                   taf.status === "terminé" && !taf.parent_notified
-                    ? "border-blue-400 shadow-blue-100"
-                    : "border-gray-200"
+                    ? "border-blue-400 shadow-blue-100" : "border-gray-200"
                 }`}>
 
-                  {/* Badge "Nouveau" si pas encore vu */}
+                  {/* Badge nouveau résultat */}
                   {taf.status === "terminé" && !taf.parent_notified && (
                     <div className="bg-blue-500 text-white text-[10px] font-black uppercase tracking-widest px-4 py-1 text-center">
                       ✨ Nouveau résultat disponible
                     </div>
                   )}
 
+                  {/* Infos TAF — cliquable → vue résultats */}
                   <Link href={`/taf/${taf.id}`} className="block p-5 hover:bg-slate-50 transition-colors">
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0 pr-3">
@@ -219,7 +237,7 @@ export default function Dashboard() {
                           )}
                         </div>
                       </div>
-                      <div className="text-right flex-shrink-0">
+                      <div className="flex-shrink-0 text-right">
                         {taf.score_global > 0 ? (
                           <p className={`text-lg font-black ${taf.score_global >= 14 ? "text-green-500" : taf.score_global >= 10 ? "text-orange-500" : "text-red-400"}`}>
                             {taf.score_global}/20
@@ -231,19 +249,25 @@ export default function Dashboard() {
                     </div>
                   </Link>
 
-                  {/* Barre partage */}
-                  <div className="border-t-2 border-gray-100 px-5 py-3 flex gap-2">
+                  {/* Barre d'actions */}
+                  <div className="border-t-2 border-gray-100 px-4 py-3 grid grid-cols-2 gap-2">
                     <button onClick={() => handleCopyLink(taf.id)}
-                      className={`flex-1 py-2 rounded-2xl font-black text-xs uppercase transition-all ${copiedId === taf.id ? "bg-green-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-purple-100 hover:text-purple-600"}`}>
-                      {copiedId === taf.id ? "✓ Copié !" : "🔗 Copier le lien"}
+                      className={`py-2 rounded-2xl font-black text-xs uppercase transition-all ${copiedId === taf.id ? "bg-green-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-purple-100 hover:text-purple-600"}`}>
+                      {copiedId === taf.id ? "✓ Copié !" : "🔗 Copier lien"}
                     </button>
                     <button onClick={() => handleWhatsApp(taf.id, taf.title)}
-                      className="flex-1 py-2 rounded-2xl font-black text-xs uppercase bg-green-100 text-green-600 hover:bg-green-500 hover:text-white transition-all">
+                      className="py-2 rounded-2xl font-black text-xs uppercase bg-green-100 text-green-600 hover:bg-green-500 hover:text-white transition-all">
                       📱 WhatsApp
                     </button>
                     <button onClick={() => router.push(`/taf/${taf.id}/edit`)}
-                      className="flex-1 py-2 rounded-2xl font-black text-xs uppercase bg-purple-100 text-purple-600 hover:bg-purple-500 hover:text-white transition-all">
-                      📋 Voir devoir
+                      className="py-2 rounded-2xl font-black text-xs uppercase bg-purple-100 text-purple-600 hover:bg-purple-500 hover:text-white transition-all">
+                      ✏️ Éditer réponses
+                    </button>
+                    <button
+                      onClick={() => handleDuplicate(taf)}
+                      disabled={duplicatingId === taf.id}
+                      className="py-2 rounded-2xl font-black text-xs uppercase bg-orange-100 text-orange-600 hover:bg-orange-500 hover:text-white transition-all disabled:opacity-50">
+                      {duplicatingId === taf.id ? "⏳ Copie..." : "📋 Dupliquer"}
                     </button>
                   </div>
                 </div>
