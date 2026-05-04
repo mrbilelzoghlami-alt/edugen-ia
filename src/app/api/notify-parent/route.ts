@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "EduGen IA <noreply@edugen-ia.app>",
+        from: "EduGen IA <onboarding@resend.dev>",
         to: profile.email_parent,
         subject: `📚 ${profile.pseudo_enfant} a terminé "${taf.title}"`,
         html: `
