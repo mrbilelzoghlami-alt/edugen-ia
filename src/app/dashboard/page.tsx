@@ -241,6 +241,10 @@ export default function Dashboard() {
                       className="flex-1 py-2 rounded-2xl font-black text-xs uppercase bg-green-100 text-green-600 hover:bg-green-500 hover:text-white transition-all">
                       📱 WhatsApp
                     </button>
+                    <button onClick={() => router.push(`/taf/${taf.id}/edit`)}
+                      className="flex-1 py-2 rounded-2xl font-black text-xs uppercase bg-purple-100 text-purple-600 hover:bg-purple-500 hover:text-white transition-all">
+                      📋 Voir devoir
+                    </button>
                   </div>
                 </div>
               ))}
